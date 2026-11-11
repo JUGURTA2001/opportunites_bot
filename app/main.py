@@ -8,6 +8,7 @@ from aiogram.types import BotCommand
 from app import config
 from app.bot.handlers import router
 from app.db.database import Database
+from app.services.scheduler import run_scheduler
 
 COMMANDS = [
     BotCommand(command="abonner", description="Suivre un mot-clé"),
@@ -29,18 +30,20 @@ async def main():
     db = Database(config.DB_PATH)
     db.init_schema()
 
-    # `db=db` est injecté par nom dans tous les gestionnaires qui ont un paramètre `db`.
     dp = Dispatcher(db=db)
     dp.include_router(router)
 
     bot = Bot(token=config.BOT_TOKEN)
     try:
         await bot.set_my_commands(COMMANDS)
-    except Exception as exc:  # le bot reste utilisable sans le menu de commandes
+    except Exception as exc:
         logging.warning("Impossible de définir les commandes : %s", exc)
+
+    scheduler_task = asyncio.create_task(run_scheduler(bot, db))
     try:
         await dp.start_polling(bot)
     finally:
+        scheduler_task.cancel()
         db.close()
 
 

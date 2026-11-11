@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS subscriptions (
     UNIQUE (user_id, keyword_norm)
 );
 
--- Utilisée à l'étape 3 : offres déjà envoyées (anti-doublon).
+-- Offres déjà vues (anti-doublon).
 CREATE TABLE IF NOT EXISTS seen_items (
     item_id    TEXT PRIMARY KEY,
     title      TEXT NOT NULL,
@@ -149,6 +149,32 @@ class Database:
                 (user_id, keyword_norm),
             )
             return cur.rowcount > 0
+
+    # --- Offres vues (anti-doublon) : NOUVEAU -----------------------------------
+
+    def mark_seen(self, item_id: str, title: str, url: str) -> bool:
+        """Enregistre l'offre. Retourne True si elle est NOUVELLE, False si déjà vue."""
+        with self._lock, self._conn:
+            cur = self._conn.execute(
+                "INSERT OR IGNORE INTO seen_items (item_id, title, url, first_seen) "
+                "VALUES (?, ?, ?, ?)",
+                (item_id, title, url, _now()),
+            )
+            return cur.rowcount > 0
+
+    def count_seen(self) -> int:
+        with self._lock:
+            return self._conn.execute("SELECT COUNT(*) FROM seen_items").fetchone()[0]
+
+    def active_subscriptions(self) -> list[tuple[int, str, str]]:
+        """(user_id, mot-clé affiché, mot-clé normalisé) des utilisateurs dont les alertes sont actives."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT s.user_id, s.keyword, s.keyword_norm "
+                "FROM subscriptions s JOIN users u ON u.user_id = s.user_id "
+                "WHERE u.active = 1"
+            ).fetchall()
+        return [(r["user_id"], r["keyword"], r["keyword_norm"]) for r in rows]
 
     # --- Statistiques ---------------------------------------------------------
 
