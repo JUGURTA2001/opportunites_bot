@@ -1,0 +1,28 @@
+# Variables d'environnement
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.venv/
+venv/
+
+# IDE
+.idea/
+.vscode/
+
+# Logs
+*.log
+
+# Base de données
+*.db
+*.sqlite
+*.sqlite3
+
+# Système
+.DS_Store
+Thumbs.db
