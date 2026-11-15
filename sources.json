@@ -1,0 +1,21 @@
+[
+  {
+    "name": "Actualités : bourses d'études (exemple)",
+    "type": "rss",
+    "url": "https://news.google.com/rss/search?q=bourse+%C3%A9tudiants+Alg%C3%A9rie&hl=fr&gl=DZ&ceid=DZ:fr"
+  },
+  {
+    "name": "Exemple de flux RSS à remplacer",
+    "type": "rss",
+    "url": "https://example.com/flux-annonces.xml",
+    "enabled": false
+  },
+  {
+    "name": "Exemple de page d'annonces à remplacer",
+    "type": "html",
+    "url": "https://example.com/annonces",
+    "link_pattern": "/annonces/",
+    "min_title_len": 25,
+    "enabled": false
+  }
+]

@@ -138,3 +138,16 @@ async def cmd_plan(message: Message, command: CommandObject, db: Database):
         return
     done = await asyncio.to_thread(db.set_plan, int(parts[0]), parts[1])
     await message.answer("✅ Formule mise à jour." if done else "⚠️ Utilisateur introuvable.")
+
+
+@router.message(Command("verifier"))
+async def cmd_check(message: Message, runner):
+    """Lance tout de suite une vérification des sources et affiche le rapport."""
+    if not is_admin(message):
+        return
+    await message.answer("⏳ Vérification des sources en cours…")
+    report = await runner.run()
+    if report is None:
+        await message.answer("Une vérification est déjà en cours, réessayez dans un instant.")
+    else:
+        await message.answer(report.format())

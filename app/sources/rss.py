@@ -1,62 +1,80 @@
-"""Lecture des flux RSS."""
-import asyncio
-import hashlib
-import logging
-from dataclasses import dataclass
+"""Lecture des flux RSS 2.0 et Atom avec la bibliothèque standard (aucune installation)."""
+import html
+import re
+import xml.etree.ElementTree as ET
 
-import aiohttp
-import feedparser
+from app.sources.errors import FeedError
+from app.sources.models import Item, is_http_url
 
-logger = logging.getLogger(__name__)
-
-SOURCES = [
-    {"name": "Bourses (test)", "url": "https://news.google.com/rss/search?q=bourse+étudiants+Algérie&hl=fr&gl=DZ&ceid=DZ:fr"},
-    {"name": "Stages (test)", "url": "https://news.google.com/rss/search?q=stage+offre+Algérie&hl=fr&gl=DZ&ceid=DZ:fr"},
-    {"name": "Emploi (test)", "url": "https://news.google.com/rss/search?q=recrutement+emploi+Algérie&hl=fr&gl=DZ&ceid=DZ:fr"},
-]
+_TAGS = re.compile(r"<[^>]+>")
+MAX_TITLE = 300
+MAX_SUMMARY = 500
 
 
-@dataclass(frozen=True)
-class Item:
-    item_id: str
-    title: str
-    url: str
-    summary: str
-    source: str
+def clean_text(raw: str | None, limit: int) -> str:
+    """Retire les balises HTML, décode les entités (&amp;...) et raccourcit."""
+    text = html.unescape(_TAGS.sub(" ", raw or ""))
+    return " ".join(text.split())[:limit]
 
 
-async def fetch_source(session: aiohttp.ClientSession, source: dict) -> list[Item]:
-    """Télécharge et lit un flux. En cas d'erreur, retourne une liste vide (le bot continue)."""
-    try:
-        timeout = aiohttp.ClientTimeout(total=20)
-        async with session.get(source["url"], timeout=timeout) as resp:
-            resp.raise_for_status()
-            content = await resp.text()
-    except Exception as exc:
-        logger.warning("Source %s inaccessible : %s", source["name"], exc)
-        return []
+def _local(tag: str) -> str:
+    """Nom de balise sans espace de noms : '{http://www.w3.org/2005/Atom}entry' -> 'entry'."""
+    return tag.rsplit("}", 1)[-1]
 
-    feed = await asyncio.to_thread(feedparser.parse, content)
-    items = []
-    for entry in feed.entries:
-        url = entry.get("link", "")
-        title = entry.get("title", "").strip()
-        if not url or not title:
+
+def _pick_link(children: list[ET.Element], guid: str) -> str:
+    candidates = []
+    for child in children:
+        if _local(child.tag) != "link":
             continue
-        raw_id = entry.get("id") or url
-        items.append(
-            Item(
-                item_id=hashlib.sha1(raw_id.encode("utf-8")).hexdigest(),
-                title=title,
-                url=url,
-                summary=entry.get("summary", ""),
-                source=source["name"],
-            )
+        href = (child.get("href") or "").strip()
+        text = (child.text or "").strip()
+        rel = child.get("rel", "alternate")
+        value = href or text
+        if value and rel in ("alternate", ""):
+            candidates.append(value)
+    if not candidates and guid:
+        candidates.append(guid)
+    for value in candidates:
+        if is_http_url(value):
+            return value.strip()
+    return ""
+
+
+def parse_feed(content: bytes | str, source_name: str) -> list[Item]:
+    """Transforme un flux RSS/Atom en liste d'offres. Lève FeedError si le contenu est invalide."""
+    # Les déclarations d'entités (<!ENTITY>) servent aux attaques par expansion : on refuse.
+    needle = b"<!entity" if isinstance(content, bytes) else "<!entity"
+    if needle in content.lower():
+        raise FeedError("flux refusé : déclarations d'entités non autorisées")
+    try:
+        root = ET.fromstring(content)
+    except ET.ParseError as exc:
+        raise FeedError(f"flux illisible : {exc}") from exc
+    if _local(root.tag) not in ("rss", "feed", "RDF"):
+        raise FeedError("ce n'est pas un flux RSS ou Atom")
+
+    items: list[Item] = []
+    seen: set[str] = set()
+    for element in root.iter():
+        if not isinstance(element.tag, str) or _local(element.tag) not in ("item", "entry"):
+            continue
+        children = list(element)
+        fields: dict[str, str] = {}
+        for child in children:
+            name = _local(child.tag)
+            if name in ("title", "summary", "description", "content", "guid", "id"):
+                fields.setdefault(name, "".join(child.itertext()))
+        title = clean_text(fields.get("title"), MAX_TITLE)
+        url = _pick_link(children, (fields.get("guid") or fields.get("id") or "").strip())
+        if not title or not url:
+            continue
+        summary = clean_text(
+            fields.get("summary") or fields.get("description") or fields.get("content"),
+            MAX_SUMMARY,
         )
+        item = Item(source=source_name, title=title, url=url, summary=summary)
+        if item.item_id not in seen:
+            seen.add(item.item_id)
+            items.append(item)
     return items
-
-
-async def fetch_all(sources: list[dict] = SOURCES) -> list[Item]:
-    async with aiohttp.ClientSession() as session:
-        results = await asyncio.gather(*(fetch_source(session, s) for s in sources))
-    return [item for sub in results for item in sub]
